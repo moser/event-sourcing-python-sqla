@@ -1,0 +1,10 @@
+black
+python-language-server
+
+pytest
+pytest-watch
+
+sqlalchemy
+psycopg2-binary ~= 2.9.1
+
+esdbclient
