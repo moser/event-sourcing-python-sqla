@@ -47,7 +47,7 @@ def db_setup():
 def print_help():
     print("Usage")
     print("python -m nextversion.main <job>")
-    print("Jobs: demo, db_setup, projections_updater")
+    print("Jobs: demo, db_setup, run_consumers")
 
 
 def demo():
@@ -103,21 +103,22 @@ def demo():
     print(tasks.get(task.aggregate_id))
 
 
-def listen_and_update_projections():
+def run_consumers():
     import time
-    from nextversion import eventstore, projections
+    from nextversion import eventstore, projections, consumers
 
     eventstore = eventstore.DBEventStore(sa.create_engine(_get_db_dsn(DB_NAME)))
     projections_engine = sa.create_engine(_get_db_dsn(PROJECTIONS_DB_NAME))
 
     tasks = projections.TaskProjection(projections_engine)
     history = projections.TaskHistoryProjection(projections_engine)
-    all_projections = [tasks, history]
+    send_emails = consumers.SendAssignmentNotificationConsumer(projections_engine)
+    all_consumers = [tasks, history, send_emails]
     while True:
         print("\n" * 3)
         print("ltime", eventstore.current_logical_time)
-        for projection in all_projections:
-            projection.update_from_events(eventstore)
+        for consumer in all_consumers:
+            consumer.consume(eventstore)
 
         for x in tasks.all_project_task_stats():
             print(x.project_id, x.task_count, x.completed_task_count)
@@ -130,8 +131,8 @@ def main():
         return
 
     job = sys.argv[1]
-    if job == "projections_updater":
-        listen_and_update_projections()
+    if job == "run_consumers":
+        run_consumers()
     elif job == "demo":
         demo()
     elif job == "db_setup":

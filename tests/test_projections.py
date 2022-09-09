@@ -42,7 +42,7 @@ def test_task_projection(events_db_engine, projections_db_engine):
     uow.commit()
 
     tasks = projections.TaskProjection(engine=projections_db_engine)
-    tasks.update_from_events(event_store)
+    tasks.consume(event_store)
 
     task = uow.tasks.get(task.aggregate_id)
     task.complete()
@@ -53,7 +53,7 @@ def test_task_projection(events_db_engine, projections_db_engine):
     )
     uow.commit()
 
-    tasks.update_from_events(event_store)
+    tasks.consume(event_store)
 
     assert "\n".join(
         [str((t.title, t.completed)) for t in tasks.all()]
@@ -66,7 +66,7 @@ def test_task_projection(events_db_engine, projections_db_engine):
     )
 
     history = projections.TaskHistoryProjection(engine=projections_db_engine)
-    history.update_from_events(event_store)
+    history.consume(event_store)
 
     assert "\n".join(
         [str((t.change_type, t.value)) for t in history.get(task_id)]

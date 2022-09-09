@@ -7,67 +7,17 @@ import sqlalchemy.orm as orm
 from sqlalchemy.dialects import postgresql as _pgsql
 from . import eventstore
 from . import domain
+from . import consumers
+
+from ._consumer_db_orm import Base, mapper_registry
 
 
-def create_housekeeping_class(mapper_registry, projection_key: str):
-    tbl = sa.Table(
-        f"{projection_key}_housekeeping",
-        mapper_registry.metadata,
-        # this is a single entry table, default + unique ensure this
-        sa.Column(
-            "pk",
-            sa.Integer(),
-            primary_key=True,
-            autoincrement=False,
-            server_default="1",
-        ),
-        sa.Column("last_seen_logical_time", sa.Integer()),
-        sa.Column("last_seen_observed_at", sa.DateTime()),
-        sa.Column("observed_event_count", sa.Integer()),
-    )
-
-    cls = type(f"Housekeeping_{projection_key}", (), {})
-
-    mapper_registry.map_imperatively(cls, tbl)
-    return cls
-
-
-class Projection:
-    EVENT_CLASSES: ClassVar[Tuple[Type[domain.Event]]] = ()
-
-    def __init__(self, engine, housekeeping_class):
-        self.engine = engine
-        Base.metadata.create_all(engine)
-        self.session = orm.Session(engine)
-        self.housekeeping = self.session.get(housekeeping_class, 1)
-        if not self.housekeeping:
-            self.housekeeping = housekeeping_class(
-                last_seen_logical_time=-1,
-                last_seen_observed_at=dt.datetime(1970, 1, 1),
-                observed_event_count=0,
-            )
-            self.session.add(self.housekeeping)
-
-    def logical_time_seen(self, logical_time: int):
-        self.session.refresh(self.housekeeping)
-        return self.housekeeping.last_seen_logical_time >= logical_time
-
-    def update_from_events(self, event_store: eventstore.EventStore):
-        for recorded_event in event_store.get_events_starting_at(
-            logical_time=self.housekeeping.last_seen_logical_time,
-            types=self.EVENT_CLASSES,
-        ):
-            self._apply(recorded_event.event, recorded_event)
-            self.housekeeping.last_seen_logical_time = recorded_event.logical_time
-            self.housekeeping.observed_event_count += 1
-        self.session.commit()
+class Projection(consumers.Consumer):
+    def _handle(self, recorded_event: eventstore.RecordedEvent):
+        self._apply(recorded_event.event, recorded_event)
 
     def _apply(self, event: domain.Event, recorded_event: eventstore.RecordedEvent):
         raise NotImplementedError
-
-
-mapper_registry = orm.registry()
-Base = mapper_registry.generate_base()
 
 
 class TaskStatsForProject(Base):
@@ -91,10 +41,8 @@ class Task(Base):
     assignee_id = sa.Column(_pgsql.UUID(as_uuid=True))
 
 
-TaskHousekeeping = create_housekeeping_class(mapper_registry, "tasks")
-
-
 class TaskProjection(Projection):
+    consumer_key = "tasks"
     EVENT_CLASSES = (
         domain.TaskCreated,
         domain.TaskTitleChanged,
@@ -102,9 +50,6 @@ class TaskProjection(Projection):
         domain.TaskAssigned,
         domain.TaskUnassigned,
     )
-
-    def __init__(self, engine):
-        super().__init__(engine=engine, housekeeping_class=TaskHousekeeping)
 
     def get(self, task_id: uuid.UUID) -> Optional[Task]:
         return self.session.get(Task, task_id)
@@ -190,15 +135,15 @@ class TaskProjection(Projection):
         task.project_stats.unassigned_task_count += 1
 
 
+TaskHousekeeping = TaskProjection.create_housekeeping_class(mapper_registry)
+
+
 class TaskHistory(Base):
     __tablename__ = "task_history"
     id = sa.Column(sa.Integer, sa.Sequence("task_history_pk"), primary_key=True)
     task_id = sa.Column(_pgsql.UUID(as_uuid=True))
     observed_at = sa.Column(sa.DateTime())
     change = sa.Column(_pgsql.JSON)
-
-
-TaskHistoryHousekeeping = create_housekeeping_class(mapper_registry, "task_history")
 
 
 @dataclasses.dataclass
@@ -209,10 +154,8 @@ class TaskHistoryEntry:
 
 
 class TaskHistoryProjection(Projection):
+    consumer_key = "task_history"
     EVENT_CLASSES = (domain.TaskTitleChanged, domain.TaskCompleted)
-
-    def __init__(self, engine):
-        super().__init__(engine=engine, housekeeping_class=TaskHistoryHousekeeping)
 
     def get(self, task_id: uuid.UUID) -> Iterable[TaskHistoryEntry]:
         for entry in (
@@ -253,3 +196,8 @@ class TaskHistoryProjection(Projection):
                 change=dict(type="Completed"),
             )
         )
+
+
+TaskHistoryHousekeeping = TaskHistoryProjection.create_housekeeping_class(
+    mapper_registry
+)
