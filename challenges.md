@@ -1,5 +1,12 @@
 # Challenges in event sourcing
 
+## No frameworks
+
+The proponents of the event sourcing approach keep telling that you should not
+use or create frameworks for it. Probably they are right because the solution
+needs to fit the system at hand. But it limits the amount of code that you
+can read to find common problems & solutions.
+
 ## Choosing an event store
 
 ### Specialized DB
@@ -28,6 +35,9 @@ Attaining a global, gapless order of events (which would be optimal for
 consumers to keep track of which events they have already processed) is hard.
 It is possible by aggressively locking a shared resource, but that effectively
 reduces the concurrency to 1.
+
+See [here](https://espadrine.github.io/blog/posts/two-postgresql-sequence-misconceptions.html)
+for some info how PostgreSQL sequences work and what they guarantee.
 
 An alternative is accepting gaps (stemming from cancelled or failed transactions)
 and certain limits to the strictness of the order. By a relaxed strictness, I
