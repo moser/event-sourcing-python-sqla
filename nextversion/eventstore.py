@@ -1,6 +1,6 @@
 import uuid, dataclasses, contextlib, datetime
 from typing import Generic, TypeVar, Type, Iterable, Protocol, Union
-from .domain import EVENT_TYPES, Event
+from .domain import Event
 from . import encoding
 import sqlalchemy as sa
 
@@ -26,19 +26,17 @@ class EventStore(Protocol):
 
 
 class DBEventStore(EventStore):
-    CLASSES = {cls.__name__: cls for cls in EVENT_TYPES}
-
-    def __init__(self, engine):
-        self.connection = engine.connect()
-        self.metadata = sa.MetaData()
-        self.tbl = sa.Table(
-            "events",
-            self.metadata,
+    @classmethod
+    def create_table(cls, name, metadata):
+        return sa.Table(
+            name,
+            metadata,
             sa.Column(
                 "logical_time",
                 sa.Integer,
-                sa.Sequence("events_logical_time"),
+                sa.Sequence(f"{name}_logical_time"),
                 unique=True,
+                nullable=False,
             ),
             sa.Column("observed_at", sa.DateTime, server_default=sa.func.now()),
             sa.Column("aggregate_id", sa.String, nullable=False, index=True),
@@ -47,7 +45,12 @@ class DBEventStore(EventStore):
             sa.Column("event_type", sa.String, nullable=False, index=True),
             sa.Column("content", sa.String, nullable=False),
         )
-        self.metadata.create_all(self.connection, checkfirst=True)
+
+    def __init__(self, session, table, event_classes: dict[str, Type[Event]]):
+        self.event_classes = event_classes
+        self.session = session
+        self.connection = session.connection()
+        self.tbl = table
         self.qry = self.tbl.select()
 
     @property
@@ -58,16 +61,16 @@ class DBEventStore(EventStore):
 
     @contextlib.contextmanager
     def transaction(self):
-        with self.connection.begin() as transaction:
-            try:
-                yield
-                transaction.commit()
-            except Exception:
-                transaction.rollback()
-                raise
+        # with self.connection.begin() as transaction:
+        try:
+            yield
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
 
     def _from_row(self, row) -> Event:
-        cls = self.CLASSES[row.event_type]
+        cls = self.event_classes[row.event_type]
         return cls(
             event_id=uuid.UUID(row.event_id),
             aggregate_id=uuid.UUID(row.aggregate_id),
@@ -78,13 +81,15 @@ class DBEventStore(EventStore):
     def get_events(
         self, aggregate_id: uuid.UUID, types: Iterable[Type[Event]]
     ) -> Iterable[Event]:
+        conditions = [
+            self.tbl.c.aggregate_id == str(aggregate_id),
+        ]
+        if types:
+            conditions.append(
+                self.tbl.c.event_type.in_([cls.__name__ for cls in types])
+            )
         for row in self.connection.execute(
-            self.qry.where(
-                sa.and_(
-                    self.tbl.c.aggregate_id == str(aggregate_id),
-                    self.tbl.c.event_type.in_([cls.__name__ for cls in types]),
-                )
-            ).order_by(self.tbl.c.sequence_id)
+            self.qry.where(sa.and_(*conditions)).order_by(self.tbl.c.sequence_id)
         ):
             yield self._from_row(row)
 

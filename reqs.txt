@@ -3,8 +3,14 @@ python-language-server
 
 pytest
 pytest-watch
+pytest-asyncio
 
 sqlalchemy
 psycopg2-binary ~= 2.9.1
+alembic
 
 esdbclient
+
+fastapi
+strawberry-graphql
+uvicorn

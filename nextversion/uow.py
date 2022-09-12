@@ -43,7 +43,9 @@ class Repo(Generic[AggregateType]):
         if aggregate_id in self._identity_map:
             yield from self._identity_map[aggregate_id].events
         else:
-            yield from self._uow.get_events(aggregate_id, self._get_event_types())
+            yield from self._uow.get_events(
+                aggregate_id, self._get_aggregate_class().event_classes
+            )
 
     def get_committable_events(self) -> Iterable[_domain.Event]:
         for aggregate in self._identity_map.values():
@@ -53,33 +55,21 @@ class Repo(Generic[AggregateType]):
                     yield event
 
 
-class TaskRepo(Repo):
-    def _get_aggregate_class(self) -> Type[AggregateType]:
-        return _domain.Task
-
-    def _get_event_types(self) -> list[Type]:
-        return _domain.TASK_EVENT_TYPES
-
-
-class ProjectRepo(Repo):
-    def _get_aggregate_class(self) -> Type[AggregateType]:
-        return _domain.Project
-
-    def _get_event_types(self) -> list[Type]:
-        return _domain.PROJECT_EVENT_TYPES
+class BankAccountRepo(Repo):
+    def _get_aggregate_class(self):
+        return _domain.BankAccount
 
 
 class UoW:
     def __init__(self, event_store: EventStore):
         self._event_store = event_store
-        self.tasks = TaskRepo(self)
-        self.projects = ProjectRepo(self)
-        self.repos = [self.tasks, self.projects]
+        self.bank_accounts = BankAccountRepo(self)
+        self.repos = [self.bank_accounts]
 
     def get_events(
-        self, aggregate_id: uuid.UUID, *types: Type
+        self, aggregate_id: uuid.UUID, types: Iterable[Type]
     ) -> Iterable[_domain.Event]:
-        return self._event_store.get_events(aggregate_id, *types)
+        return self._event_store.get_events(aggregate_id, types)
 
     def rollback(self):
         for repo in self.repos:

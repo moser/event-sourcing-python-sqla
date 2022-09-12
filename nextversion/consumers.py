@@ -40,15 +40,12 @@ class Consumer:
         cls._housekeeping_class = housekeeping_class
         return housekeeping_class
 
-    def __init__(self, engine):
+    def __init__(self, session):
         if not self._housekeeping_class:
             raise RuntimeError(
                 "Please call `create_housekeeping_class` on the consumer class to finish it's configuration"
             )
-        self.engine = engine
-        # TODO leave this to alembic migrations
-        self._housekeeping_class.__table__.metadata.create_all(engine)
-        self.session = orm.Session(engine)
+        self.session = session
         self.housekeeping = self.session.get(self._housekeeping_class, 1)
         if not self.housekeeping:
             self.housekeeping = self._housekeeping_class(
@@ -74,24 +71,3 @@ class Consumer:
 
     def _handle(self, recorded_event: eventstore.RecordedEvent):
         raise NotImplementedError
-
-
-class SendAssignmentNotificationConsumer(Consumer):
-    consumer_key = "send_assignment_notification"
-    EVENT_CLASSES = (domain.TaskAssigned,)
-
-    def _handle(self, recorded_event: eventstore.RecordedEvent):
-        self._handle_domain_event(recorded_event.event)
-
-    @functools.singledispatchmethod
-    def _handle_domain_event(self, event: domain.Event):
-        raise NotImplementedError
-
-    @_handle_domain_event.register
-    def _handle_task_assigned(self, event: domain.TaskAssigned):
-        print(f"Send email to user {event.assignee_id}")
-
-
-SendAssignmentNotificationConsumerHousekeeping = (
-    SendAssignmentNotificationConsumer.create_housekeeping_class(mapper_registry)
-)

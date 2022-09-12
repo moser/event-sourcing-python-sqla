@@ -1,7 +1,7 @@
 import functools
 import dataclasses
 import uuid
-from typing import Type, Iterable, Protocol, Optional
+from typing import Type, Iterable, Protocol, Optional, ClassVar, Tuple
 
 
 class Event(Protocol):
@@ -13,6 +13,7 @@ class Event(Protocol):
 class Aggregate:
     aggregate_id: uuid.UUID
     _events: list[Event]
+    event_classes: ClassVar[Tuple[Type[Event]]] = ()
 
     def __init__(self):
         self._events = []
@@ -61,152 +62,26 @@ class Aggregate:
 
 
 @dataclasses.dataclass(frozen=True)
-class TaskCreated(Event):
-    title: str
-    description: str
-    project_id: uuid.UUID
-    aggregate_id: uuid.UUID
-    sequence_id: int
-    event_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-
-
-@dataclasses.dataclass(frozen=True)
-class TaskTitleChanged(Event):
-    title: str
-    aggregate_id: uuid.UUID
-    sequence_id: int
-    event_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-
-
-@dataclasses.dataclass(frozen=True)
-class TaskCompleted(Event):
-    aggregate_id: uuid.UUID
-    sequence_id: int
-    event_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-
-
-@dataclasses.dataclass(frozen=True)
-class TaskAssigned(Event):
-    assignee_id: uuid.UUID
-    aggregate_id: uuid.UUID
-    sequence_id: int
-    event_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-
-
-@dataclasses.dataclass(frozen=True)
-class TaskUnassigned(Event):
-    aggregate_id: uuid.UUID
-    sequence_id: int
-    event_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-
-
-TASK_EVENT_TYPES = [
-    TaskCreated,
-    TaskTitleChanged,
-    TaskCompleted,
-    TaskAssigned,
-    TaskUnassigned,
-]
-
-
-class Task(Aggregate):
-    title: str
-    description: str
-    completed: bool
-    project_id: uuid.UUID
-    assignee_id: Optional[uuid.UUID]
-
-    def __init__(self):
-        super().__init__()
-
-    def validate(self):
-        self._validate_types(
-            "aggregate_id", "title", "description", "completed", "project_id"
-        )
-        assert len(self.title) >= 3
-
-    @classmethod
-    def create(cls, title: str, description: str, project_id: uuid.UUID) -> "Task":
-        obj = cls()
-        obj.apply(
-            TaskCreated(
-                sequence_id=0,
-                aggregate_id=uuid.uuid4(),
-                title=title,
-                description=description,
-                project_id=project_id,
-            )
-        )
-        return obj
-
-    @functools.singledispatchmethod
-    def _apply(self, event: Event):
-        raise NotImplementedError
-
-    @_apply.register
-    def _apply_task_created(self, event: TaskCreated):
-        self.aggregate_id = event.aggregate_id
-        self.project_id = event.project_id
-        self.title = event.title
-        self.description = event.description
-        self.completed = False
-        self.assignee_id = None
-
-    def update_title(self, title: str):
-        self.apply(TaskTitleChanged(**self.next_event_attrs, title=title))
-
-    @_apply.register
-    def _apply_task_title_updated(self, event: TaskTitleChanged):
-        self.title = event.title
-
-    def complete(self):
-        self.apply(TaskCompleted(**self.next_event_attrs))
-
-    @_apply.register
-    def _apply_task_completed(self, event: TaskCompleted):
-        self.completed = True
-
-    def assign(self, assignee_id: uuid.UUID):
-        self.apply(TaskAssigned(**self.next_event_attrs, assignee_id=assignee_id))
-
-    @_apply.register
-    def _apply_task_assigned(self, event: TaskAssigned):
-        self.assignee_id = event.assignee_id
-
-    def unassign(self):
-        self.apply(TaskUnassigned(**self.next_event_attrs))
-
-    @_apply.register
-    def _apply_task_unassigned(self, event: TaskUnassigned):
-        self.assignee_id = None
-
-
-@dataclasses.dataclass(frozen=True)
-class ProjectCreated(Event):
+class BankAccountCreated(Event):
     name: str
     aggregate_id: uuid.UUID
     sequence_id: int
     event_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
 
 
-PROJECT_EVENT_TYPES = [ProjectCreated]
-
-
-class Project(Aggregate):
+class BankAccount(Aggregate):
     name: str
+    event_classes: ClassVar[Tuple[Type[Event]]] = (BankAccountCreated,)
 
     def validate(self):
         self._validate_types("aggregate_id", "name")
+        assert len(self.name) >= 3
 
     @classmethod
-    def create(cls, name: str) -> "Project":
+    def create(cls, name: str):
         obj = cls()
         obj.apply(
-            ProjectCreated(
-                sequence_id=0,
-                aggregate_id=uuid.uuid4(),
-                name=name,
-            )
+            BankAccountCreated(name=name, aggregate_id=uuid.uuid4(), sequence_id=0)
         )
         return obj
 
@@ -215,9 +90,11 @@ class Project(Aggregate):
         raise NotImplementedError
 
     @_apply.register
-    def _apply_project_created(self, event: ProjectCreated):
+    def _apply_created(self, event: BankAccountCreated):
         self.aggregate_id = event.aggregate_id
         self.name = event.name
 
 
-EVENT_TYPES = [*TASK_EVENT_TYPES]
+EVENT_CLASSES = {
+    cls.__name__: cls for agg in [BankAccount] for cls in agg.event_classes
+}

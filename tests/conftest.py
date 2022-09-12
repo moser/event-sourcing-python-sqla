@@ -1,17 +1,23 @@
+import os
+import pathlib
 import sqlalchemy as sa
 import pytest
 
-
-TEST_DB_NAME = "test_events"
-PROJECTIONS_DB_NAME = "test_projections"
+TEST_DB_NAME = "es_test"
 
 
-def _get_db_dsn(db_name):
-    return f"postgresql://postgres:docker@localhost:45432/{db_name}"
+def pytest_configure(config):
+    """Sets env vars as early as possible, so that early uses of the config
+    are still covered"""
+    os.environ[
+        "BANK_ACCOUNTS_DB_DSN"
+    ] = f"postgresql://postgres:docker@localhost:45432/{TEST_DB_NAME}"
 
 
 def create_clean_db(db_name):
-    engine = sa.create_engine(_get_db_dsn("postgres"))
+    from nextversion import config
+
+    engine = sa.create_engine(config.get().get_db_dsn("postgres"))
     conn = engine.connect()
     test_db_exists = (
         conn.execute(
@@ -27,17 +33,58 @@ def create_clean_db(db_name):
     conn.execute(f"CREATE DATABASE {db_name}")
 
 
+def migrate_db():
+    from alembic import command
+    from alembic.config import Config
+
+    print("Migrating DB")
+    alembic_cfg = Config(str(pathlib.Path(__file__).parent.parent / "alembic.ini"))
+    command.upgrade(alembic_cfg, "head")
+    print("Migrated DB")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def clean_db():
     create_clean_db(TEST_DB_NAME)
-    create_clean_db(PROJECTIONS_DB_NAME)
+    migrate_db()
 
 
-@pytest.fixture(scope="session")
-def events_db_engine():
-    return sa.create_engine(_get_db_dsn(TEST_DB_NAME), echo=True)
+@pytest.fixture
+def db_session(clean_db):
+    from nextversion import _db
+
+    session = _db.get_session()
+
+    orig_get_session = _db.get_session
+    _db.get_session = lambda *_, **__: session
+
+    commit_fn = session.commit
+    close_fn = session.close
+    rollback_fn = session.rollback
+    session.commit = session.flush
+    session.close = session.flush
+    session.rollback = lambda: None
+    yield session
+    session.commit = commit_fn
+    session.close = close_fn
+    session.rollback = rollback_fn
+    session.rollback()
+    session.close()
+
+    _db.get_session = orig_get_session
 
 
-@pytest.fixture(scope="session")
-def projections_db_engine():
-    return sa.create_engine(_get_db_dsn(PROJECTIONS_DB_NAME))
+@pytest.fixture
+def event_store(db_session):
+    from nextversion import eventstore
+    from nextversion.domain import EVENT_CLASSES
+    from nextversion._consumer_db_orm import events_table
+
+    return eventstore.DBEventStore(db_session, events_table, EVENT_CLASSES)
+
+
+@pytest.fixture
+def uow(event_store):
+    from nextversion import uow
+
+    return uow.UoW(event_store)
